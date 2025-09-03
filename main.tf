@@ -2,64 +2,45 @@ provider "aws" {
   region = "ap-southeast-1"
 }
 
-# ---------------- VPC ----------------
+# -----------------
+# VPC + Networking
+# -----------------
 resource "aws_vpc" "main" {
   cidr_block = "10.0.0.0/16"
-  tags = {
-    Name = "sonarqube-vpc"
-  }
 }
 
-# ---------------- Subnets ----------------
 resource "aws_subnet" "public" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = "10.0.1.0/24"
   map_public_ip_on_launch = true
   availability_zone       = "ap-southeast-1a"
-
-  tags = {
-    Name = "public-subnet"
-  }
 }
 
 resource "aws_subnet" "private" {
   vpc_id            = aws_vpc.main.id
   cidr_block        = "10.0.2.0/24"
   availability_zone = "ap-southeast-1a"
-
-  tags = {
-    Name = "private-subnet"
-  }
 }
 
-# ---------------- Internet Gateway ----------------
 resource "aws_internet_gateway" "gw" {
   vpc_id = aws_vpc.main.id
-  tags = {
-    Name = "sonarqube-igw"
-  }
 }
 
-# ---------------- Public Route Table ----------------
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
-  tags = {
-    Name = "public-rt"
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.gw.id
   }
 }
 
-resource "aws_route" "public_internet_access" {
-  route_table_id         = aws_route_table.public.id
-  destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.gw.id
-}
-
-resource "aws_route_table_association" "public_assoc" {
+resource "aws_route_table_association" "public" {
   subnet_id      = aws_subnet.public.id
   route_table_id = aws_route_table.public.id
 }
 
-# ---------------- NAT Gateway for Private Subnet ----------------
+# NAT Gateway
 resource "aws_eip" "nat" {
   domain = "vpc"
 }
@@ -67,62 +48,56 @@ resource "aws_eip" "nat" {
 resource "aws_nat_gateway" "nat" {
   allocation_id = aws_eip.nat.id
   subnet_id     = aws_subnet.public.id
-  depends_on    = [aws_internet_gateway.gw]
-
-  tags = {
-    Name = "nat-gateway"
-  }
 }
 
-# ---------------- Private Route Table ----------------
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
-  tags = {
-    Name = "private-rt"
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.nat.id
   }
 }
 
-resource "aws_route" "private_nat_gateway" {
-  route_table_id         = aws_route_table.private.id
-  destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.nat.id
-}
-
-resource "aws_route_table_association" "private_assoc" {
+resource "aws_route_table_association" "private" {
   subnet_id      = aws_subnet.private.id
   route_table_id = aws_route_table.private.id
 }
 
-# ---------------- Security Group ----------------
-resource "aws_security_group" "sonar_sg" {
-  name        = "sonar-sg"
-  description = "Allow SSH and SonarQube"
-  vpc_id      = aws_vpc.main.id
+# -----------------
+# Security Groups
+# -----------------
+resource "aws_security_group" "bastion_sg" {
+  vpc_id = aws_vpc.main.id
 
   ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # Normally, restrict to Bastion IP
+    cidr_blocks = ["0.0.0.0/0"] # Allow SSH from anywhere
   }
 
-  ingress {
-    from_port   = 9000
-    to_port     = 9000
-    protocol    = "tcp"
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+}
+
+resource "aws_security_group" "jenkins_sg" {
+  vpc_id = aws_vpc.main.id
 
   ingress {
     from_port   = 8080
     to_port     = 8080
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # Or restrict to your IP
+    cidr_blocks = ["0.0.0.0/0"] # Jenkins Web UI
   }
-  
+
   ingress {
-    from_port   = 5432
-    to_port     = 5432
+    from_port   = 22
+    to_port     = 22
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -135,26 +110,81 @@ resource "aws_security_group" "sonar_sg" {
   }
 }
 
-# ---------------- EC2 Instance (Private) ----------------
-resource "aws_instance" "sonar_ec2" {
-  ami           = "ami-0df7a207adb9748c7" # Ubuntu 22.04 (update if needed)
-  instance_type = "c7i-flex.large"
-  subnet_id     = aws_subnet.private.id
-  vpc_security_group_ids = [aws_security_group.sonar_sg.id]
-  key_name      = "222" # replace with your keypair
+resource "aws_security_group" "sonarqube_sg" {
+  vpc_id = aws_vpc.main.id
 
-  associate_public_ip_address = false
+  ingress {
+    from_port       = 9000
+    to_port         = 9000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.jenkins_sg.id] # only Jenkins can access SonarQube
+  }
 
-  tags = {
-    Name = "SonarQube-EC2"
+  ingress {
+    from_port       = 22
+    to_port         = 22
+    protocol        = "tcp"
+    security_groups = [aws_security_group.bastion_sg.id] # SSH via Bastion
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
-# ---------------- Outputs ----------------
-output "ec2_private_ip" {
-  value = aws_instance.sonar_ec2.private_ip
+# -----------------
+# EC2 Instances
+# -----------------
+resource "aws_instance" "bastion" {
+  ami           = "ami-0f62d9254ca98e1aa" # Ubuntu 22.04 (example)
+  instance_type = "t2.micro"
+  subnet_id     = aws_subnet.public.id
+  key_name      = "my-key"
+
+  vpc_security_group_ids = [aws_security_group.bastion_sg.id]
+  tags = {
+    Name = "BastionHost"
+  }
 }
 
-output "nat_gateway_ip" {
-  value = aws_eip.nat.public_ip
+resource "aws_instance" "jenkins" {
+  ami           = "ami-0f62d9254ca98e1aa"
+  instance_type = "t2.medium"
+  subnet_id     = aws_subnet.public.id
+  key_name      = "my-key"
+
+  vpc_security_group_ids = [aws_security_group.jenkins_sg.id]
+  tags = {
+    Name = "JenkinsServer"
+  }
+}
+
+resource "aws_instance" "sonarqube" {
+  ami           = "ami-0f62d9254ca98e1aa"
+  instance_type = "t2.medium"
+  subnet_id     = aws_subnet.private.id
+  key_name      = "my-key"
+
+  vpc_security_group_ids = [aws_security_group.sonarqube_sg.id]
+  tags = {
+    Name = "SonarQubeServer"
+  }
+}
+
+# -----------------
+# Outputs
+# -----------------
+output "bastion_ip" {
+  value = aws_instance.bastion.public_ip
+}
+
+output "jenkins_ip" {
+  value = aws_instance.jenkins.public_ip
+}
+
+output "sonarqube_private_ip" {
+  value = aws_instance.sonarqube.private_ip
 }
