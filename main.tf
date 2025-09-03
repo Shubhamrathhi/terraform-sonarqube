@@ -163,7 +163,7 @@ resource "aws_security_group" "app_sg" {
 # -----------------
 resource "aws_instance" "bastion" {
   ami           = "ami-0df7a207adb9748c7" # Ubuntu 22.04
-  instance_type = "t2.micro"
+  instance_type = "t3.micro"
   subnet_id     = aws_subnet.public.id
   key_name      = "222"
 
