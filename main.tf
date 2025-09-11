@@ -97,7 +97,7 @@ resource "aws_instance" "sonar_ec2" {
   instance_type          = "c7i-flex.large"
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.sonar_sg.id]
-  key_name               = "jenkins" # replace with your keypair
+  key_name               = "ssh-2" # replace with your keypair
 
   tags = {
     Name = "SonarQube-EC2"
