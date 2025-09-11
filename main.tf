@@ -104,6 +104,30 @@ resource "aws_instance" "sonar_ec2" {
   }
 }
 
+# ---------------- S3 Bucket ----------------
+resource "aws_s3_bucket" "sonar_bucket" {
+  bucket = "neuroninja-shubham-terraform-bucket" # must be globally unique name
+
+  tags = {
+    Name        = "sonar-artifacts"
+    Environment = "Dev"
+  }
+}
+
+# (Optional) Enable versioning
+resource "aws_s3_bucket_versioning" "sonar_bucket_versioning" {
+  bucket = aws_s3_bucket.sonar_bucket.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# ---------------- Outputs ----------------
 output "ec2_public_ip" {
   value = aws_instance.sonar_ec2.public_ip
+}
+
+output "s3_bucket_name" {
+  value = aws_s3_bucket.sonar_bucket.bucket
 }
