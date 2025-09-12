@@ -107,7 +107,7 @@ resource "aws_instance" "sonar_ec2" {
 # ---------------- S3 Bucket ----------------
 resource "aws_s3_bucket" "sonar_bucket" {
   bucket = "neuroninja-shubham-terraform-bucket31" # must be globally unique name
-
+  force_destroy = true
   tags = {
     Name        = "sonar-artifacts"
     Environment = "Dev"
